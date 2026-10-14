@@ -120,6 +120,8 @@ use the GUI unless you know what you are doing.
 - Only values already stored in the save can be edited. The game leaves out
   default values, such as level 0, so gear that has never been upgraded shows
   "nothing to edit". Upgrade it once in-game, or add it fresh with a level.
+  Stackable consumables are the exception: when the game hasn't stored a count,
+  the editor shows a quantity of 1 marked "not stored yet", and you can set it.
 - New ranged weapons start with no reserve ammo. It refills at a checkpoint.
 - Mutators are added at their base level.
 - `save_0.sav` and the other world saves (campaign and adventure progress) are

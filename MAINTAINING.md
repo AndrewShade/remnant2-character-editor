@@ -250,6 +250,13 @@ object, with `ModItemID = -1`, `ModLevel = 1` and no instance data. If the save
 has no boss weapon to copy from, adding one fails with an error rather than
 guessing.
 
+**Owned stackables without a stored `Quantity`** (the game leaves out the
+default of 1, for example Bottled Shaedberry or Bandage) appear in the GUI as
+editable rows with id `qty:<name>`. Setting one calls `r2items.set_quantity()`,
+which adds the `Quantity` property. That is a structural change, so it goes
+through `r2model` like adding an item. `NOT_STACKABLE` lists consumable-typed
+permanent tools (Liquid Escape) that must never get a quantity.
+
 **Not addable** (`NOT_ADDABLE_REASON` in `r2items.py`):
 - engrams and archetypes: they also need trait-list entries
 - skills and traits: they live in the trait list
@@ -371,7 +378,8 @@ After updating:
 - Mutator levels: owned mutators in the reference save had no `Level`
   property, so mutators are added at base level.
 - Consumables that the game stores without `Quantity` (Bandage, Antidote, …)
-  probably mean quantity 1. The editor always writes an explicit `Quantity`.
+  are assumed to mean quantity 1. The editor always writes an explicit
+  `Quantity` when adding, or when the user sets one. Not yet confirmed in-game.
 - `save_N.sav` files use a `PersistenceContainer` layout. `r2parse.py` has
   untested reading code for it, and `r2model.py` only handles profiles. World
   saves are backed up but never edited.

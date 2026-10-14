@@ -195,6 +195,41 @@ def add_item(model, slot, entry, quantity=1, level=0):
     items.append(new)
 
 
+# Consumable-typed items that are really permanent tools, not stacks
+NOT_STACKABLE = {"Consumable_LiquidEscape"}
+
+
+def is_stackable(entry):
+    return entry is not None and ADDABLE[entry["type"]][2] and entry["id"] not in NOT_STACKABLE
+
+
+def set_quantity(model, slot, entry, quantity):
+    """Sets Quantity on an owned stackable item, adding the property when the game
+    left it out (it omits the default). Mutates model."""
+    if not is_stackable(entry):
+        raise ValueError(f"{entry['name']} doesn't stack.")
+    if not 0 <= quantity <= QTY_MAX:
+        raise ValueError(f"Quantity must be between 0 and {QTY_MAX:,}.")
+    cd = _character_data(model, slot)
+    for e in r2model.prop(_inventory(cd), "Items").value.items:
+        if cd.objects[r2model.prop(e, "ItemBP").value].path != entry["path"]:
+            continue
+        inst = r2model.prop(e, "InstanceData").value
+        if inst < 0:
+            raise ValueError(f"{entry['name']} has no instance data to hold a quantity.")
+        obj = cd.objects[inst]
+        if obj.props is None:
+            obj.props = Node("Bag", props=[], none=N("None"))
+            obj.extra = obj.extra or b"\x00" * 4
+        existing = r2model.prop(obj.props, "Quantity")
+        if existing:
+            existing.value = quantity
+        else:
+            obj.props.props.append(_int_prop("Quantity", quantity))
+        return
+    raise ValueError(f"You don't own {entry['name']}.")
+
+
 _MOD_PATHS = None
 
 

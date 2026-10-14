@@ -103,9 +103,11 @@ class App(tk.Tk):
         self.full = None       # working copy (includes added items)
         self.fields, self.rows, self.edits = {}, [], {}
         self.added = []
+        self.qty_fixes = []    # quantities added where the game had left them out
         self.char_slots = []
         self.catalog = r2items.load_catalog()
         self.catalog_by_path = {e["path"]: e for e in self.catalog}
+        self.catalog_by_short = {e["path"].rsplit(".", 1)[-1].removesuffix("_C"): e for e in self.catalog}
 
         top = ttk.Frame(self, padding=8)
         top.pack(fill="x")
@@ -158,7 +160,7 @@ class App(tk.Tk):
 
     # ---- state ----
     def dirty(self):
-        return bool(self.edits or self.added)
+        return bool(self.edits or self.added or self.qty_fixes)
 
     def slot(self):
         return self.char_slots[self.char_box.current()][0]
@@ -214,7 +216,7 @@ class App(tk.Tk):
         return True
 
     def load_character(self):
-        self.edits, self.added = {}, []
+        self.edits, self.added, self.qty_fixes = {}, [], []
         self.full = self.original
         self.recollect()
         self.status.set(f"Loaded {os.path.basename(self.path)}. Double-click a value to edit it.")
@@ -248,6 +250,11 @@ class App(tk.Tk):
         for tab, label, field, key, name in entries:
             if q and q not in label.lower() and q not in name.lower():
                 continue
+            if key is None and r2items.is_stackable(self.catalog_by_short.get(name)) and name not in added_names:
+                # Owned stackable whose quantity the game didn't store (it omits the default of 1)
+                self.trees[tab].insert("", "end", iid=f"qty:{name}",
+                                       values=(label, "Quantity", 1, f"0 – {QTY_MAX:,} (not stored yet)"))
+                continue
             if key is None:
                 new = name in added_names
                 self.trees[tab].insert("", "end", values=(label, field, "", "new, unsaved" if new else "nothing to edit"),
@@ -264,9 +271,9 @@ class App(tk.Tk):
     # ---- editing ----
     def begin_edit(self, event, tree):
         key = tree.focus() if event is None else tree.identify_row(event.y)
-        if not key or key not in self.fields:
+        if not key or (key not in self.fields and not key.startswith("qty:")):
             return
-        if self.rule(key) is None:
+        if not key.startswith("qty:") and self.rule(key) is None:
             self.status.set(f"{key} is read-only. The game calculates it, or editing it could break your save.")
             return
         x, y, w, h = tree.bbox(key, "value")
@@ -279,7 +286,10 @@ class App(tk.Tk):
         def commit(_=None):
             text = entry.get().strip().replace(",", "")
             entry.destroy()
-            self.apply_edit(key, text)
+            if key.startswith("qty:"):
+                self.set_missing_quantity(key[4:], text)
+            else:
+                self.apply_edit(key, text)
 
         entry.bind("<Return>", commit)
         entry.bind("<FocusOut>", commit)
@@ -301,8 +311,30 @@ class App(tk.Tk):
             self.edits.pop(key, None)
         else:
             self.edits[key] = new
-        self.status.set(f"{key} → {new}. {len(self.edits) + len(self.added)} unsaved change(s).")
+        self.status.set(f"{key} → {new}. {len(self.edits) + len(self.added) + len(self.qty_fixes)} unsaved change(s).")
         self.refresh()
+
+    def set_missing_quantity(self, name, text):
+        """Adds a Quantity the game left out; a structural edit, like adding an item."""
+        entry = self.catalog_by_short.get(name)
+        try:
+            qty = int(text)
+        except ValueError:
+            self.status.set(f"'{text}' is not a whole number.")
+            return
+        if qty == 1:
+            return  # unchanged: 1 is what the missing value already means
+        self.commit_edits()
+        model = r2model.load(self.full)
+        try:
+            r2items.set_quantity(model, self.slot(), entry, qty)
+        except ValueError as e:
+            self.status.set("Blocked: " + str(e))
+            return
+        self.full = r2model.dump(model)
+        self.qty_fixes.append(entry["name"])
+        self.recollect()
+        self.status.set(f"{entry['name']} quantity → {qty:,}. Not saved yet.")
 
     def commit_edits(self):
         """Folds pending number edits into the working copy (needed before structural changes)."""
@@ -331,7 +363,7 @@ class App(tk.Tk):
         return None
 
     def revert(self):
-        self.edits, self.added = {}, []
+        self.edits, self.added, self.qty_fixes = {}, [], []
         if self.original:
             self.full = self.original
             self.recollect()
@@ -350,7 +382,7 @@ class App(tk.Tk):
                                    "save on exit, which would undo or corrupt your edits.")
             return
         if not messagebox.askyesno("Save changes?",
-                                   f"{len(self.edits)} value edit(s) and {len(self.added)} added item(s) will be "
+                                   f"{len(self.edits) + len(self.qty_fixes)} value edit(s) and {len(self.added)} added item(s) will be "
                                    "written.\n\nYour whole save folder is backed up first. Turn off Steam Cloud "
                                    "for Remnant 2 so it doesn't overwrite the edit.\n\nContinue?"):
             return
