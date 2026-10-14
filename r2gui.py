@@ -41,7 +41,9 @@ TABS = [
      "Weapon levels: regular weapons 0–20, boss weapons (with a built-in mod) 0–10. Gear left at "
      "level 0 has no stored level; add it fresh or upgrade it once in-game before editing."),
     ("Fragments & Prisms", ("RelicFragment_", "MetaGem_", "Prism"),
-     "Relic fragment levels are limited to 1–10. Prism levels are tied to their segment data, so they are read-only."),
+     "Relic fragment levels run 1–31: Cracked, Ordinary, Solid, Polished, Regal and Flawless each take 5 levels "
+     "(base, +1 to +4), and 31 is Mythic. The tier name is shown next to each level. "
+     "Prism levels are tied to their segment data, so they are read-only."),
 ]
 HIDDEN_FIELDS = {"Ammo", "AmmoInClip"}
 
@@ -130,6 +132,10 @@ class App(tk.Tk):
             self.nb.add(frame, text=tab)
             ttk.Label(frame, text="⚠ " + note, wraplength=840, foreground="#8a5a00",
                       padding=(4, 6)).pack(fill="x")
+            if tab == "Fragments & Prisms":
+                bar = ttk.Frame(frame, padding=(4, 0, 4, 6))
+                bar.pack(fill="x")
+                ttk.Button(bar, text="Max selected fragment (Mythic)", command=self.max_selected_fragment).pack(side="left")
             body = ttk.Frame(frame)
             body.pack(fill="both", expand=True)
             tree = ttk.Treeview(body, columns=("name", "field", "value", "limit"), show="headings",
@@ -184,7 +190,7 @@ class App(tk.Tk):
             if name.startswith(("Trait_", "Archetype_")):
                 return (0, 10)
             if name.startswith("RelicFragment_"):
-                return (1, 10)
+                return (1, r2items.FRAGMENT_MAX)
             entry = next((e for e in self.catalog if e["id"] == name), None)
             if entry and entry["type"] == "weapon":
                 return r2items.level_range(entry)
@@ -223,6 +229,7 @@ class App(tk.Tk):
 
     def recollect(self):
         _, self.rows, self.fields = r2edit.collect(self.full, self.slot())
+        self.charges = r2items.relic_charges(r2model.load(self.full), self.slot())
         self.refresh()
 
     def refresh(self):
@@ -264,16 +271,23 @@ class App(tk.Tk):
             v = self.edits.get(key, self.fields[key].value)
             tags = ("edited",) if key in self.edits else ("new",) if name in added_names else ("locked",) if rng is None else ()
             limit = "read-only" if rng is None else f"{rng[0]:,} – {rng[1]:,}"
+            if name.startswith("RelicFragment_") and field == "Level":
+                limit += f"   now: {r2items.fragment_tier(v)}"
             self.trees[tab].insert("", "end", iid=key, values=(label, field, v, limit), tags=tags)
+        if not q or q in "relic charges":
+            self.trees["Character"].insert("", "end", iid="charges", values=(
+                "Relic charges", "Dragon Heart upgrades", self.charges,
+                f"{r2items.BASE_CHARGES} – {r2items.MAX_CHARGES}"))
         for i, (tab, _, _) in enumerate(TABS):
             self.nb.tab(i, text=f"{tab} ({len(self.trees[tab].get_children())})")
 
     # ---- editing ----
     def begin_edit(self, event, tree):
         key = tree.focus() if event is None else tree.identify_row(event.y)
-        if not key or (key not in self.fields and not key.startswith("qty:")):
+        special = key.startswith("qty:") or key == "charges"
+        if not key or (key not in self.fields and not special):
             return
-        if not key.startswith("qty:") and self.rule(key) is None:
+        if not special and self.rule(key) is None:
             self.status.set(f"{key} is read-only. The game calculates it, or editing it could break your save.")
             return
         x, y, w, h = tree.bbox(key, "value")
@@ -288,6 +302,8 @@ class App(tk.Tk):
             entry.destroy()
             if key.startswith("qty:"):
                 self.set_missing_quantity(key[4:], text)
+            elif key == "charges":
+                self.set_charges(text)
             else:
                 self.apply_edit(key, text)
 
@@ -311,7 +327,8 @@ class App(tk.Tk):
             self.edits.pop(key, None)
         else:
             self.edits[key] = new
-        self.status.set(f"{key} → {new}. {len(self.edits) + len(self.added) + len(self.qty_fixes)} unsaved change(s).")
+        tier = f" ({r2items.fragment_tier(new)})" if key.startswith("RelicFragment_") and key.endswith(".Level") else ""
+        self.status.set(f"{key} → {new}{tier}. {len(self.edits) + len(self.added) + len(self.qty_fixes)} unsaved change(s).")
         self.refresh()
 
     def set_missing_quantity(self, name, text):
@@ -335,6 +352,35 @@ class App(tk.Tk):
         self.qty_fixes.append(entry["name"])
         self.recollect()
         self.status.set(f"{entry['name']} quantity → {qty:,}. Not saved yet.")
+
+    def set_charges(self, text):
+        """Adds/removes Dragon Heart upgrade items; a structural edit like adding an item."""
+        try:
+            charges = int(text)
+        except ValueError:
+            self.status.set(f"'{text}' is not a whole number.")
+            return
+        if charges == self.charges:
+            return
+        self.commit_edits()
+        model = r2model.load(self.full)
+        try:
+            r2items.set_relic_charges(model, self.slot(), charges)
+        except ValueError as e:
+            self.status.set("Blocked: " + str(e))
+            return
+        self.full = r2model.dump(model)
+        self.qty_fixes.append("Relic charges")
+        self.recollect()
+        self.status.set(f"Relic charges → {charges}. Not saved yet.")
+
+    def max_selected_fragment(self):
+        tree = self.trees["Fragments & Prisms"]
+        key = tree.focus()
+        if not (key.startswith("RelicFragment_") and key.endswith(".Level")):
+            self.status.set("Select a relic fragment's level row first.")
+            return
+        self.apply_edit(key, str(r2items.FRAGMENT_MAX))
 
     def commit_edits(self):
         """Folds pending number edits into the working copy (needed before structural changes)."""
@@ -480,9 +526,12 @@ class AddDialog(tk.Toplevel):
         self.qty.set(1)
         self.qty.pack(side="left")
         ttk.Label(row, text="   Level:").pack(side="left")
-        self.lvl = ttk.Spinbox(row, from_=0, to=20, width=6)
+        self.lvl = ttk.Spinbox(row, from_=0, to=20, width=6, command=self.show_range)
         self.lvl.set(0)
         self.lvl.pack(side="left")
+        self.lvl.bind("<KeyRelease>", lambda e: self.show_range())
+        self.max_btn = ttk.Button(row, text="Max", width=5, command=self.set_max_level)
+        self.max_btn.pack(side="left", padx=(4, 0))
         self.range_lbl = ttk.Label(row, text="")
         self.range_lbl.pack(side="left", padx=6)
         ttk.Button(row, text="Close", command=self.destroy).pack(side="right")
@@ -524,9 +573,27 @@ class AddDialog(tk.Toplevel):
         self.qty.set(1)
         self.lvl.configure(state="normal" if rng else "disabled", from_=rng[0] if rng else 0, to=rng[1] if rng else 0)
         self.lvl.set(rng[0] if rng else 0)
-        self.range_lbl.configure(text=f"(allowed {rng[0]}–{rng[1]})" if rng else "")
+        self.show_range()
         extra = f"  Built-in mod: {r2items.pretty(x['mod'])}." if x.get("mod") else ""
         self.info.set(f"{x['name']} [{x['label']}]{extra}\n{x['note'] or 'No source notes available.'}")
+
+    def set_max_level(self):
+        x = self.selected()
+        rng = r2items.level_range(x) if x else None
+        if rng:
+            self.lvl.set(rng[1])
+            self.show_range()
+
+    def show_range(self):
+        x = self.selected()
+        rng = r2items.level_range(x) if x else None
+        text = f"(allowed {rng[0]}–{rng[1]})" if rng else ""
+        if rng and x["type"] == "fragment":
+            try:
+                text += f"  = {r2items.fragment_tier(int(self.lvl.get()))}"
+            except ValueError:
+                pass
+        self.range_lbl.configure(text=text)
 
     def add(self):
         x = self.selected()

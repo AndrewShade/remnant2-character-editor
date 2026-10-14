@@ -257,6 +257,17 @@ which adds the `Quantity` property. That is a structural change, so it goes
 through `r2model` like adding an item. `NOT_STACKABLE` lists consumable-typed
 permanent tools (Liquid Escape) that must never get a quantity.
 
+**Relic charges** aren't stored on the relic. Each Wallace upgrade adds one hidden
+`Item_DragonHeartUpgrade` inventory item (`ItemInstanceData`, no properties), and
+charges = 3 + the number of those items (7 items = 10 charges, confirmed in-game).
+The Character tab's **Relic charges** row calls `r2items.set_relic_charges()`, which
+adds items or removes them with `r2model.remove_objects()`. Removal deletes the
+inventory entries, their instance objects and, when no upgrades are left, the class
+object, then renumbers every object reference (`r2model.object_refs()`: ObjectProperty
+values in bags, arrays and maps). It refuses if anything still points at a removed
+object. In profile character data, an object's stored index always equals its
+position, and `outer` is only ever 0 or -1, so neither needs extra handling.
+
 **Not addable** (`NOT_ADDABLE_REASON` in `r2items.py`):
 - engrams and archetypes: they also need trait-list entries
 - skills and traits: they live in the trait list
@@ -269,12 +280,21 @@ permanent tools (Liquid Escape) that must never get a quantity.
 | Where | Rule |
 | --- | --- |
 | `App.rule()` | Ranges per field; `None` means read-only |
-| `r2items.level_range()` | Weapon 0–20, boss weapon 0–10, fragment 1–10 |
+| `r2items.level_range()` | Weapon 0–20, boss weapon 0–10, fragment 1–31 |
 | `r2items.validate()` | No duplicate items; quantity 1–9,999,999; level in range |
 | `game_running()` | No saving or restoring while `Remnant2*` is in `tasklist` |
 | `HIDDEN_FIELDS` | `Ammo`/`AmmoInClip` aren't shown (meaningless, often negative) |
 
 The caps are the game's normal maximums. If a patch raises a cap, update these.
+
+**Fragment levels are tiers.** A stored level maps to an in-game name as
+`r2items.fragment_tier()` does. Cracked, Ordinary, Solid, Polished, Regal and
+Flawless each take 5 levels (base, +1 to +4), and 31 is Mythic (no sub-levels).
+Stored 2 = Cracked +1, 7 = Ordinary +1, 10 = Ordinary +4 and 31 = Mythic were
+confirmed in-game; the tier names and order come from the community wiki. The editor first
+capped fragments at 10 on the wrong assumption that the level was the "+N";
+that cap stopped at Ordinary +4. The item database's `MaxValue` and
+`CustomMaxValue` look like the Flawless +4 and Mythic stat values.
 
 ## Backups
 
@@ -375,6 +395,8 @@ After updating:
   loading in the game proves an edit is accepted.
 - The `ModLevel = 1` for a newly added boss weapon's built-in mod is copied from
   an observed save (Nebula at weapon level 0), not confirmed for other levels.
+- Fragment levels 11–30 (Solid through Flawless +4) follow the tier list but
+  haven't been checked in-game individually. Level 31 = Mythic was confirmed in-game.
 - Mutator levels: owned mutators in the reference save had no `Level`
   property, so mutators are added at base level.
 - Consumables that the game stores without `Quantity` (Bandage, Antidote, …)

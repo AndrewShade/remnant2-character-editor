@@ -65,9 +65,10 @@ The editor refuses changes that are known to be risky:
 | Trait and archetype levels | 0–10 |
 | Regular weapon levels | 0–20 |
 | Boss weapon levels (weapons with a built-in mod) | 0–10 |
-| Relic fragment levels | 1–10 |
+| Relic fragment levels | 1–31 (Cracked → Flawless +4 → Mythic; the tier name is shown) |
 | Item quantities | 0–9,999,999 |
 | Trait points | 0–9,999 |
+| Relic charges (Character tab) | 3–10 (adds or removes Wallace's Dragon Heart upgrades) |
 | Trait Rank, Power Level, Item Level | Read-only (the game recalculates them) |
 | Perks, archetype skills, prism levels | Read-only (tied to other data) |
 | Adding a second copy of an item you own | Blocked (edit the quantity instead) |

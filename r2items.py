@@ -70,12 +70,30 @@ def load_catalog():
     return sorted(out, key=lambda e: (e["label"], e["name"]))
 
 
+# Relic fragment tiers: each has a base level plus +1..+4 (5 stored levels),
+# then Mythic as a single final level. Stored 2 = Cracked +1, 7 = Ordinary +1,
+# 10 = Ordinary +4 and 31 = Mythic were confirmed in-game; the rest follows the
+# community tier list.
+FRAGMENT_TIERS = ["Cracked", "Ordinary", "Solid", "Polished", "Regal", "Flawless"]
+FRAGMENT_MAX = len(FRAGMENT_TIERS) * 5 + 1  # 31 = Mythic
+
+
+def fragment_tier(level):
+    """Stored fragment level -> in-game name, e.g. 10 -> 'Ordinary +4', 31 -> 'Mythic'."""
+    if level >= FRAGMENT_MAX:
+        return "Mythic"
+    if level < 1:
+        return "?"
+    tier, step = divmod(level - 1, 5)
+    return FRAGMENT_TIERS[tier] + (f" +{step}" if step else "")
+
+
 def level_range(entry):
     """Allowed upgrade level range, or None if the item has no level."""
     if entry["type"] == "weapon":
         return (0, 10) if entry["mod"] else (0, 20)
     if entry["type"] == "fragment":
-        return (1, 10)
+        return (1, FRAGMENT_MAX)
     return None
 
 
@@ -228,6 +246,59 @@ def set_quantity(model, slot, entry, quantity):
             obj.props.props.append(_int_prop("Quantity", quantity))
         return
     raise ValueError(f"You don't own {entry['name']}.")
+
+
+# Relic charges: each Wallace upgrade is one hidden Item_DragonHeartUpgrade in
+# the inventory. Confirmed in-game: 7 upgrade items = 10 charges (3 base).
+DRAGON_HEART_UPGRADE = "/Game/Items/Common/Item_DragonHeartUpgrade.Item_DragonHeartUpgrade_C"
+BASE_CHARGES = 3
+MAX_CHARGES = 10
+
+
+def _upgrade_entries(cd):
+    items = r2model.prop(_inventory(cd), "Items").value.items
+    return [e for e in items if cd.objects[r2model.prop(e, "ItemBP").value].path == DRAGON_HEART_UPGRADE]
+
+
+def relic_charges(model, slot):
+    return BASE_CHARGES + len(_upgrade_entries(_character_data(model, slot)))
+
+
+def set_relic_charges(model, slot, charges):
+    """Adds or removes Dragon Heart upgrade items so the relic has `charges`. Mutates model."""
+    if not BASE_CHARGES <= charges <= MAX_CHARGES:
+        raise ValueError(f"Relic charges must be between {BASE_CHARGES} and {MAX_CHARGES}.")
+    cd = _character_data(model, slot)
+    inv = _inventory(cd)
+    items = r2model.prop(inv, "Items").value.items
+    have = _upgrade_entries(cd)
+    want = charges - BASE_CHARGES
+    if want < len(have):
+        remove = have[want:]  # keep the oldest `want`, drop the rest
+        doomed = {r2model.prop(e, "InstanceData").value for e in remove} - {-1}
+        for e in remove:
+            items.remove(e)
+        if not _upgrade_entries(cd):  # drop the class object too once nothing uses it
+            doomed |= {i for i, o in enumerate(cd.objects) if o.loaded and o.path == DRAGON_HEART_UPGRADE}
+        r2model.remove_objects(cd, doomed)
+    for _ in range(want - len(have)):
+        tmpl = have[0] if have else None
+        inst_tmpl = cd.objects[r2model.prop(tmpl, "InstanceData").value] if tmpl else \
+            next(o for o in cd.objects if not o.loaded and o.path == SCRIPT + "ItemInstanceData")
+        inst = copy.deepcopy(inst_tmpl)
+        used = [o.oname.number for o in cd.objects if o.oname and o.oname.number is not None]
+        inst.oname = N("ItemInstanceData", min(used) - 1 if used else None)
+        inst.index = len(cd.objects)
+        inst.props = Node("Bag", props=[], none=N("None"))
+        inst.extra = b"\x00" * 4
+        cd.objects.append(inst)
+        idgen = r2model.prop(inv, "IDGen")
+        idgen.value += 1
+        new = copy.deepcopy(items[0])
+        for name, val in (("ID", idgen.value), ("ItemBP", _class_object(cd, DRAGON_HEART_UPGRADE)), ("New", 0),
+                          ("Favorited", 0), ("Hidden", 0), ("EquipmentSlotIndex", -1), ("InstanceData", inst.index)):
+            r2model.prop(new, name).value = val
+        items.append(new)
 
 
 _MOD_PATHS = None

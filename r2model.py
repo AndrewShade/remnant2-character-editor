@@ -515,3 +515,70 @@ def prop(bag, name):
         if p.name.name == name:
             return p
     return None
+
+
+def object_refs(sd):
+    """Yields (getter, setter) for every object index stored in sd's data:
+    ObjectProperty values in bags, arrays and maps (nested blobs have their own tables)."""
+    def visit(v, t):
+        # v is a value of property type t; yields refs inside it
+        if t == "ObjectProperty":
+            return  # handled by the caller, which owns the slot
+        if t == "StructProperty" and isinstance(v, Node) and v.kind == "Struct":
+            yield from bag_refs(v.value) if isinstance(v.value, Node) and v.value.kind == "Bag" else ()
+        elif t == "ArrayProperty" and isinstance(v, Node):
+            if v.kind == "ArrayStruct":
+                for it in v.items:
+                    if isinstance(it, Node) and it.kind == "Bag":
+                        yield from bag_refs(it)
+            elif v.et.name == "ObjectProperty":
+                for i in range(len(v.items)):
+                    yield (lambda i=i: v.items[i], lambda x, i=i: v.items.__setitem__(i, x))
+        elif t == "MapProperty" and isinstance(v, Node):
+            for i, (k, val) in enumerate(v.pairs):
+                if v.kt.name == "ObjectProperty":
+                    yield (lambda i=i: v.pairs[i][0], lambda x, i=i: v.pairs.__setitem__(i, (x, v.pairs[i][1])))
+                if v.vt.name == "ObjectProperty":
+                    yield (lambda i=i: v.pairs[i][1], lambda x, i=i: v.pairs.__setitem__(i, (v.pairs[i][0], x)))
+                for x, xt in ((k, v.kt.name), (val, v.vt.name)):
+                    if xt == "StructProperty" and isinstance(x, Node) and x.kind == "Bag":
+                        yield from bag_refs(x)
+
+    def bag_refs(bag):
+        for p in bag.props:
+            if p.type.name == "ObjectProperty":
+                yield (lambda p=p: p.value, lambda x, p=p: setattr(p, "value", x))
+            else:
+                yield from visit(p.value, p.type.name)
+
+    for o in sd.objects:
+        if o.props is not None:
+            yield from bag_refs(o.props)
+        for c in o.comps or ():
+            if c.data.kind == "Bag":
+                yield from bag_refs(c.data)
+
+
+def remove_objects(sd, doomed):
+    """Removes objects (by index) from sd and renumbers every reference to the rest.
+    Raises if anything still references a removed object."""
+    doomed = set(doomed)
+    if not doomed:
+        return
+    if 0 in doomed:
+        raise ValueError("refusing to remove object 0")
+    remap, n = {}, 0
+    for i in range(len(sd.objects)):
+        if i not in doomed:
+            remap[i] = n
+            n += 1
+    refs = list(object_refs(sd))
+    for get, _ in refs:
+        if get() in doomed:
+            raise ValueError(f"object {get()} is still referenced; remove its references first")
+    for get, put in refs:
+        if get() >= 0:
+            put(remap[get()])
+    sd.objects = [o for i, o in enumerate(sd.objects) if i not in doomed]
+    for i, o in enumerate(sd.objects):
+        o.index = i
